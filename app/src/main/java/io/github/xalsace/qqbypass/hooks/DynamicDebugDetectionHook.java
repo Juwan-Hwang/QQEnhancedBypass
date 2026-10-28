@@ -6,11 +6,6 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import org.luckypray.dexkit.DexKitBridge;
-import org.luckypray.dexkit.query.FindMethod;
-import org.luckypray.dexkit.query.matchers.MethodMatcher;
-import org.luckypray.dexkit.result.MethodData;
-
 import java.lang.reflect.Member;
 import java.util.List;
 
@@ -67,33 +62,9 @@ public class DynamicDebugDetectionHook {
         try {
             XposedEntry.log("DynamicDebug: Searching for debug checkers...");
 
-            // Reuse the shared bridge (owned by DexKitDetector); do NOT close it here.
-            DexKitBridge bridge = DexKitDetector.getBridge();
-            if (bridge == null) {
-                XposedEntry.log("DynamicDebug: shared bridge null, skipping");
-                return;
-            }
-
-            // Find methods calling Debug.isDebuggerConnected()
-            List<MethodData> debugCheckers = bridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .addInvoke(MethodMatcher.create()
-                            .declaredClass("android.os.Debug")
-                            .name("isDebuggerConnected"))
-                    )
-            );
-
-            // Find methods reading TracerPid from /proc/self/status.
-            // usingStrings(vararg) is AND, so keep to the single strongest marker.
-            List<MethodData> tracerPidReaders = bridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .usingStrings("TracerPid")
-                    )
-            );
-
-            // Shared bridge - do NOT close (owned by DexKitDetector)
+            // Cached DexKit lookups (disk cache first; a scan runs only on a miss).
+            List<String> debugCheckers = DexKitDetector.findDebugCheckers();
+            List<String> tracerPidReaders = DexKitDetector.findTracerPidReaders();
 
             XposedEntry.log("DynamicDebug: Found " + debugCheckers.size() + " debug checkers");
             XposedEntry.log("DynamicDebug: Found " + tracerPidReaders.size() + " TracerPid readers");
@@ -111,22 +82,8 @@ public class DynamicDebugDetectionHook {
         try {
             XposedEntry.log("DynamicDebug: Searching for emulator checkers...");
 
-            // Reuse the shared bridge (owned by DexKitDetector); do NOT close it here.
-            DexKitBridge bridge = DexKitDetector.getBridge();
-            if (bridge == null) {
-                XposedEntry.log("DynamicDebug: shared bridge null, skipping");
-                return;
-            }
-
-            // Find methods checking emulator markers
-            List<MethodData> emulatorCheckers = bridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .usingStrings("goldfish", "ranchu", "qemu", "vbox", "genymotion")
-                    )
-            );
-
-            // Shared bridge - do NOT close (owned by DexKitDetector)
+            // Cached DexKit lookup (disk cache first; a scan runs only on a miss).
+            List<String> emulatorCheckers = DexKitDetector.findEmulatorCheckers();
 
             XposedEntry.log("DynamicDebug: Found " + emulatorCheckers.size() + " emulator checkers");
 
@@ -138,18 +95,14 @@ public class DynamicDebugDetectionHook {
     }
 
     private static void hookCheckerList(XC_LoadPackage.LoadPackageParam lpparam,
-                                        List<MethodData> checkers, String type) {
-        for (MethodData methodData : checkers) {
+                                        List<String> checkers, String type) {
+        for (String descriptor : checkers) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override

@@ -4,8 +4,6 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import org.luckypray.dexkit.result.MethodData;
-
 import java.io.File;
 import java.lang.reflect.Member;
 import java.util.List;
@@ -79,7 +77,7 @@ public class DynamicRootDetectionHook {
     }
 
     private static void hookSuPathCheckers(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> suCheckers = DexKitDetector.findSuPathCheckers();
+        List<String> suCheckers = DexKitDetector.findSuPathCheckers();
         if (suCheckers.isEmpty()) {
             XposedEntry.log("DynamicRoot: No su path checkers found by DexKit");
             return;
@@ -87,17 +85,13 @@ public class DynamicRootDetectionHook {
 
         XposedEntry.log("DynamicRoot: Hooking " + suCheckers.size() + " su path checkers");
 
-        for (MethodData methodData : suCheckers) {
+        for (String descriptor : suCheckers) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
@@ -119,7 +113,7 @@ public class DynamicRootDetectionHook {
     }
 
     private static void hookPackageQueries(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> packageQueries = DexKitDetector.findSuspiciousPackageQueries();
+        List<String> packageQueries = DexKitDetector.findSuspiciousPackageQueries();
         if (packageQueries.isEmpty()) {
             XposedEntry.log("DynamicRoot: No package queries found by DexKit");
             return;
@@ -127,17 +121,13 @@ public class DynamicRootDetectionHook {
 
         XposedEntry.log("DynamicRoot: Hooking " + packageQueries.size() + " package queries");
 
-        for (MethodData methodData : packageQueries) {
+        for (String descriptor : packageQueries) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override

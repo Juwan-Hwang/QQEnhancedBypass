@@ -4,8 +4,6 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import org.luckypray.dexkit.result.MethodData;
-
 import java.lang.reflect.Member;
 import java.util.List;
 
@@ -75,7 +73,7 @@ public class DynamicRuntimeMonitorHook {
     }
 
     private static void hookRuntimeExecCallers(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> execCallers = DexKitDetector.findRuntimeExecCallers();
+        List<String> execCallers = DexKitDetector.findRuntimeExecCallers();
         if (execCallers.isEmpty()) {
             XposedEntry.log("DynamicRuntime: No Runtime.exec callers found by DexKit");
             return;
@@ -83,18 +81,13 @@ public class DynamicRuntimeMonitorHook {
 
         XposedEntry.log("DynamicRuntime: Hooking " + execCallers.size() + " Runtime.exec callers");
 
-        for (MethodData methodData : execCallers) {
+        for (String descriptor : execCallers) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                // Resolve the exact method (correct overload) from the full DEX descriptor
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
@@ -112,7 +105,7 @@ public class DynamicRuntimeMonitorHook {
     }
 
     private static void hookProcessBuilderCallers(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> pbCallers = DexKitDetector.findProcessBuilderCallers();
+        List<String> pbCallers = DexKitDetector.findProcessBuilderCallers();
         if (pbCallers.isEmpty()) {
             XposedEntry.log("DynamicRuntime: No ProcessBuilder callers found by DexKit");
             return;
@@ -120,17 +113,13 @@ public class DynamicRuntimeMonitorHook {
 
         XposedEntry.log("DynamicRuntime: Hooking " + pbCallers.size() + " ProcessBuilder callers");
 
-        for (MethodData methodData : pbCallers) {
+        for (String descriptor : pbCallers) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override

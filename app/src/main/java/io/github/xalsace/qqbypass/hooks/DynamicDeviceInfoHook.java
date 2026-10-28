@@ -6,11 +6,6 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import org.luckypray.dexkit.DexKitBridge;
-import org.luckypray.dexkit.query.FindMethod;
-import org.luckypray.dexkit.query.matchers.MethodMatcher;
-import org.luckypray.dexkit.result.MethodData;
-
 import java.lang.reflect.Member;
 import java.util.ArrayList;
 import java.util.List;
@@ -58,45 +53,10 @@ public class DynamicDeviceInfoHook {
         try {
             XposedEntry.log("DynamicDevice: Searching for device info readers...");
 
-            // Reuse the shared bridge (owned by DexKitDetector); do NOT close it here.
-            DexKitBridge bridge = DexKitDetector.getBridge();
-            if (bridge == null) {
-                XposedEntry.log("DynamicDevice: shared bridge null, skipping");
-                return;
-            }
-
-            // Find methods calling TelephonyManager.getDeviceId (IMEI)
-            List<MethodData> imeiReaders = bridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .addInvoke(MethodMatcher.create()
-                            .declaredClass("android.telephony.TelephonyManager")
-                            .name("getDeviceId"))
-                    )
-            );
-
-            // Find methods calling Settings.Secure.getString(ANDROID_ID)
-            List<MethodData> androidIdReaders = bridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .addInvoke(MethodMatcher.create()
-                            .declaredClass("android.provider.Settings$Secure")
-                            .name("getString"))
-                        .usingStrings("android_id")
-                    )
-            );
-
-            // Find methods calling Build.getSerial()
-            List<MethodData> serialReaders = bridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .addInvoke(MethodMatcher.create()
-                            .declaredClass("android.os.Build")
-                            .name("getSerial"))
-                    )
-            );
-
-            // Shared bridge - do NOT close (owned by DexKitDetector)
+            // Cached DexKit lookups (disk cache first; a scan runs only on a miss).
+            List<String> imeiReaders = DexKitDetector.findImeiReaders();
+            List<String> androidIdReaders = DexKitDetector.findAndroidIdReaders();
+            List<String> serialReaders = DexKitDetector.findSerialReaders();
 
             XposedEntry.log("DynamicDevice: Found " + imeiReaders.size() + " IMEI readers");
             XposedEntry.log("DynamicDevice: Found " + androidIdReaders.size() + " Android ID readers");
@@ -114,18 +74,14 @@ public class DynamicDeviceInfoHook {
     }
 
     private static void hookDeviceReaderList(XC_LoadPackage.LoadPackageParam lpparam,
-                                             List<MethodData> readers, String type) {
-        for (MethodData methodData : readers) {
+                                             List<String> readers, String type) {
+        for (String descriptor : readers) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override

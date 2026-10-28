@@ -4,8 +4,6 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import org.luckypray.dexkit.result.MethodData;
-
 import java.lang.reflect.Member;
 import java.util.List;
 
@@ -44,7 +42,7 @@ public class DynamicXposedDetectionHook {
     }
 
     private static void hookArtMethodDetectors(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> artDetectors = DexKitDetector.findArtHookDetectors();
+        List<String> artDetectors = DexKitDetector.findArtHookDetectors();
         if (artDetectors.isEmpty()) {
             XposedEntry.log("DynamicXposed: No ArtMethod detectors found by DexKit");
             return;
@@ -52,17 +50,13 @@ public class DynamicXposedDetectionHook {
 
         XposedEntry.log("DynamicXposed: Hooking " + artDetectors.size() + " ArtMethod detectors");
 
-        for (MethodData methodData : artDetectors) {
+        for (String descriptor : artDetectors) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
@@ -98,7 +92,7 @@ public class DynamicXposedDetectionHook {
     }
 
     private static void hookMapsReaders(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> mapsReaders = DexKitDetector.findMapsReaders();
+        List<String> mapsReaders = DexKitDetector.findMapsReaders();
         if (mapsReaders.isEmpty()) {
             XposedEntry.log("DynamicXposed: No maps readers found by DexKit");
             return;
@@ -106,17 +100,13 @@ public class DynamicXposedDetectionHook {
 
         XposedEntry.log("DynamicXposed: Hooking " + mapsReaders.size() + " /proc/self/maps readers");
 
-        for (MethodData methodData : mapsReaders) {
+        for (String descriptor : mapsReaders) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
@@ -157,7 +147,7 @@ public class DynamicXposedDetectionHook {
     }
 
     private static void hookQSecDetectors(XC_LoadPackage.LoadPackageParam lpparam) {
-        List<MethodData> qsecDetectors = DexKitDetector.findQSecHookDetectors();
+        List<String> qsecDetectors = DexKitDetector.findQSecHookDetectors();
         if (qsecDetectors.isEmpty()) {
             XposedEntry.log("DynamicXposed: No QSec detectors found by DexKit");
             return;
@@ -165,17 +155,13 @@ public class DynamicXposedDetectionHook {
 
         XposedEntry.log("DynamicXposed: Hooking " + qsecDetectors.size() + " QSec hook detectors");
 
-        for (MethodData methodData : qsecDetectors) {
+        for (String descriptor : qsecDetectors) {
             try {
-                String className = methodData.getClassName();
-                String methodName = methodData.getMethodName();
+                String className = DexKitDetector.descriptorClassName(descriptor);
+                String methodName = DexKitDetector.descriptorMethodName(descriptor);
 
-                Member method;
-                try {
-                    method = methodData.getMethodInstance(lpparam.classLoader);
-                } catch (Throwable t) {
-                    continue;
-                }
+                Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                if (method == null) continue;
 
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override

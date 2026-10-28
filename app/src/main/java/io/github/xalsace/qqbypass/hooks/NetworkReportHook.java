@@ -5,11 +5,6 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import org.luckypray.dexkit.DexKitBridge;
-import org.luckypray.dexkit.query.FindMethod;
-import org.luckypray.dexkit.query.matchers.MethodMatcher;
-import org.luckypray.dexkit.result.MethodData;
-
 import java.lang.reflect.Member;
 import java.util.List;
 
@@ -161,7 +156,7 @@ public class NetworkReportHook {
      * them. That was wrong twice over: Blueberry.a doesn't exist (dead hook), and
      * oqKCa.a has an int-returning overload where setResult(null) throws an
      * uncatchable ClassCastException. Here we resolve the exact method via
-     * getMethodInstance() and only neutralize String-returning readers (-> "").
+     * a cached descriptor lookup and only neutralize String-returning readers (-> "").
      */
     private static void hookTuringFD(XC_LoadPackage.LoadPackageParam lpparam) {
         new Thread(() -> {
@@ -171,29 +166,20 @@ public class NetworkReportHook {
                     XposedEntry.log("[TuringFD] DexKit not available, skip proc-reader hook");
                     return;
                 }
-                DexKitBridge bridge = DexKitDetector.getBridge();
-                if (bridge == null) {
-                    XposedEntry.log("[TuringFD] shared bridge null, skip proc-reader hook");
-                    return;
-                }
-
-                List<MethodData> procReaders = bridge.findMethod(
-                    FindMethod.create()
-                        .matcher(MethodMatcher.create()
-                            .usingStrings("/proc/%d/cmdline"))
-                );
+                List<String> procReaders = DexKitDetector.findProcCmdlineReaders();
                 XposedEntry.log("[TuringFD] found " + procReaders.size() + " proc readers by fingerprint");
 
-                for (MethodData md : procReaders) {
+                for (String descriptor : procReaders) {
                     try {
-                        Member method = md.getMethodInstance(lpparam.classLoader);
+                        Member method = DexKitDetector.resolveDescriptor(descriptor, lpparam.classLoader);
+                        if (method == null) continue;
                         // Only neutralize String-returning readers; skip primitives
                         // (int helper overload) to avoid a ClassCastException crash.
                         if (!(method instanceof java.lang.reflect.Method)) continue;
                         Class<?> ret = ((java.lang.reflect.Method) method).getReturnType();
                         if (ret != String.class) {
                             XposedEntry.log("[TuringFD] skip non-String reader "
-                                + md.getClassName() + "." + md.getMethodName()
+                                + DexKitDetector.descriptorClassName(descriptor) + "." + DexKitDetector.descriptorMethodName(descriptor)
                                 + " (returns " + ret.getName() + ")");
                             continue;
                         }
@@ -205,7 +191,7 @@ public class NetworkReportHook {
                             }
                         });
                         XposedEntry.log("[TuringFD] neutralized proc reader: "
-                            + md.getClassName() + "." + md.getMethodName());
+                            + DexKitDetector.descriptorClassName(descriptor) + "." + DexKitDetector.descriptorMethodName(descriptor));
                     } catch (Throwable t) {
                         XposedEntry.log("[TuringFD] failed to hook proc reader: "
                             + t.getClass().getSimpleName() + ": " + t.getMessage());
@@ -215,7 +201,6 @@ public class NetworkReportHook {
                 XposedEntry.log("[TuringFD] proc-reader lookup failed: "
                     + t.getClass().getName() + ": " + t.getMessage());
             }
-            // Shared bridge - do NOT close (owned by DexKitDetector)
         }).start();
     }
 
