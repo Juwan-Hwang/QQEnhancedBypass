@@ -5,7 +5,9 @@ import android.content.pm.ApplicationInfo;
 
 import org.luckypray.dexkit.DexKitBridge;
 import org.luckypray.dexkit.query.FindMethod;
+import org.luckypray.dexkit.query.enums.StringMatchType;
 import org.luckypray.dexkit.query.matchers.MethodMatcher;
+import org.luckypray.dexkit.query.matchers.base.StringMatcher;
 import org.luckypray.dexkit.result.MethodData;
 
 import java.util.ArrayList;
@@ -124,9 +126,26 @@ public class DexKitDetector {
 
             // OR-semantics: usingStrings(...) is AND within one query, so we union
             // separate single-string queries to catch methods referencing ANY marker.
+            // The last two markers are verified present in current QQ string pools
+            // (checked against 9.3.75): the QSec anti-hook task registers under its
+            // plain name and the all-so hook pass is gated by this config key,
+            // while the ART-internal names above no longer appear as literals.
             List<MethodData> results = findMethodsUsingAnyString(
                 "ArtMethod", "art_quick", "entry_point", "jni_code",
-                "instrumentationExit", "quick_to_interpreter");
+                "instrumentationExit", "quick_to_interpreter",
+                "ArtTiHookTask", "ALL_SO_HOOK");
+
+            // "artMethod" (the reflective field name on Method/Executable) needs an
+            // exact match: as a substring it also hits unrelated method-tracing
+            // strings such as "startMethodTracing".
+            Map<String, MethodData> unique = new HashMap<>();
+            for (MethodData m : results) {
+                unique.put(m.getDescriptor(), m);
+            }
+            for (MethodData m : findMethodsUsingExactString("artMethod")) {
+                unique.put(m.getDescriptor(), m);
+            }
+            results = new ArrayList<>(unique.values());
 
             detectionCache.put("art_hook", results);
             XposedBridge.log("[" + TAG + "] Found " + results.size() + " ArtMethod hook detectors");
@@ -351,16 +370,37 @@ public class DexKitDetector {
         try {
             XposedBridge.log("[" + TAG + "] Searching for suspicious package queries...");
 
-            List<MethodData> results = dexKitBridge.findMethod(
-                FindMethod.create()
-                    .matcher(MethodMatcher.create()
-                        .addInvoke(MethodMatcher.create()
-                            .declaredClass("android.content.pm.PackageManager")
-                            .name("getPackageInfo"))
-                        // single "contains" marker; runtime isSuspiciousPackage() does the rest
-                        .usingStrings("magisk")
-                    )
-            );
+            // Union over marker x query-method pairs. "magisk" alone found nothing
+            // on current QQ (the string never appears in 9.3.75's string pool at
+            // all); the Xposed installer package name does appear, and checks may
+            // go through getApplicationInfo as well as getPackageInfo. Precision
+            // still comes from the runtime isSuspiciousPackage() argument check,
+            // so a wider net here cannot block legitimate queries.
+            Map<String, MethodData> unique = new HashMap<>();
+            String[] markers = {"magisk", "de.robv.android.xposed.installer"};
+            String[] queryMethods = {"getPackageInfo", "getApplicationInfo"};
+            for (String marker : markers) {
+                for (String queryMethod : queryMethods) {
+                    try {
+                        List<MethodData> found = dexKitBridge.findMethod(
+                            FindMethod.create()
+                                .matcher(MethodMatcher.create()
+                                    .addInvoke(MethodMatcher.create()
+                                        .declaredClass("android.content.pm.PackageManager")
+                                        .name(queryMethod))
+                                    .usingStrings(marker)
+                                )
+                        );
+                        for (MethodData m : found) {
+                            unique.put(m.getDescriptor(), m);
+                        }
+                    } catch (Exception e) {
+                        XposedBridge.log("[" + TAG + "] package query failed for '"
+                            + marker + "'/'" + queryMethod + "': " + e.getMessage());
+                    }
+                }
+            }
+            List<MethodData> results = new ArrayList<>(unique.values());
 
             detectionCache.put("package_query", results);
             XposedBridge.log("[" + TAG + "] Found " + results.size() + " package query methods");
@@ -392,6 +432,22 @@ public class DexKitDetector {
             }
         }
         return new ArrayList<>(unique.values());
+    }
+
+    /**
+     * Find methods using a string as an exact literal (no substring hits).
+     */
+    private static List<MethodData> findMethodsUsingExactString(String marker) {
+        try {
+            return dexKitBridge.findMethod(
+                FindMethod.create()
+                    .matcher(MethodMatcher.create()
+                        .addUsingString(new StringMatcher(marker, StringMatchType.Equals, false)))
+            );
+        } catch (Exception e) {
+            XposedBridge.log("[" + TAG + "] exact query failed for '" + marker + "': " + e.getMessage());
+            return new ArrayList<>();
+        }
     }
 
     /**
