@@ -137,9 +137,9 @@ public class DynamicRootDetectionHook {
                             if (arg instanceof String) {
                                 String pkg = (String) arg;
                                 if (isSuspiciousPackage(pkg)) {
-                                    // Throw NameNotFoundException
-                                    throw new android.content.pm.PackageManager.NameNotFoundException(
-                                        "Package not found: " + pkg);
+                                    // setThrowable 与 throw 效果相同，但不留 Exception in hooker 噪声
+                                    param.setThrowable(new android.content.pm.PackageManager.NameNotFoundException(
+                                        "Package not found: " + pkg));
                                 }
                             }
                         }

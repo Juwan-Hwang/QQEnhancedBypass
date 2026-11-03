@@ -29,11 +29,25 @@ import java.util.List;
  */
 public class XposedDetectionHook {
 
-    private static final String[] XPOSED_PACKAGES = {
+    private static final java.util.concurrent.atomic.AtomicInteger mapsFilteredCount = new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * 要从 QQ 视角藏掉的包（合并版清单，2026-11-03）：Xposed 系 4 + Root 系 3 + Shizuku/Scene/GKD + 本模块自己。
+     * 注意 LSPosed 管理器的真包名是 org.lsposed.manager——旧清单里的 io.github.lsposed.manager 是错的，
+     * 两个都留着（旧名无害）。不要往里加系统/小米/腾讯自家包：QQ 查它们是自身功能，拦了反而出问题。
+     */
+    private static final String[] HIDDEN_PACKAGES = {
         "de.robv.android.xposed.installer",
         "org.meowcat.edxposed.manager",
+        "org.lsposed.manager",
         "io.github.lsposed.manager",
-        "com.topjohnwu.magisk"
+        "com.topjohnwu.magisk",
+        "me.weishu.kernelsu",
+        "me.bmax.apatch",
+        "moe.shizuku.privileged.api",
+        "com.omarea.vtools",
+        "li.songe.gkd",
+        "io.github.xalsace.qqbypass"
     };
 
     private static final String[] HOOK_LIBRARY_PATTERNS = {
@@ -73,9 +87,11 @@ public class XposedDetectionHook {
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     if (param.args.length > 0) {
                         String packageName = (String) param.args[0];
-                        if (isXposedPackage(packageName)) {
+                        if (isHiddenPackage(packageName)) {
                             XposedEntry.log("Blocked PackageManager query for: " + packageName);
-                            throw new android.content.pm.PackageManager.NameNotFoundException();
+                            // 用 setThrowable 而不是在回调里 throw：效果一样（调用方收到 NameNotFoundException），
+                            // 但不会在 LSPosed 日志里留一串 Exception in hooker 噪声
+                            param.setThrowable(new android.content.pm.PackageManager.NameNotFoundException());
                         }
                     }
                 }
@@ -87,8 +103,8 @@ public class XposedDetectionHook {
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     if (param.args.length > 0) {
                         String packageName = (String) param.args[0];
-                        if (isXposedPackage(packageName)) {
-                            throw new android.content.pm.PackageManager.NameNotFoundException();
+                        if (isHiddenPackage(packageName)) {
+                            param.setThrowable(new android.content.pm.PackageManager.NameNotFoundException());
                         }
                     }
                 }
@@ -105,7 +121,7 @@ public class XposedDetectionHook {
 
                         for (Object pkg : packages) {
                             String pkgName = (String) XposedHelpers.getObjectField(pkg, "packageName");
-                            if (!isXposedPackage(pkgName)) {
+                            if (!isHiddenPackage(pkgName)) {
                                 filtered.add(pkg);
                             }
                         }
@@ -113,6 +129,66 @@ public class XposedDetectionHook {
                     }
                 }
             });
+
+        HookUtils.hookAllMethods("android.app.ApplicationPackageManager", "getInstalledApplications",
+            new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                    if (param.getResult() != null) {
+                        @SuppressWarnings("unchecked")
+                        List<Object> apps = (List<Object>) param.getResult();
+                        List<Object> filtered = new ArrayList<>();
+                        for (Object app : apps) {
+                            String pkgName = (String) XposedHelpers.getObjectField(app, "packageName");
+                            if (!isHiddenPackage(pkgName)) {
+                                filtered.add(app);
+                            }
+                        }
+                        param.setResult(filtered);
+                    }
+                }
+            });
+
+        // getPackageUid 是包存在性探测的轻量入口（不走 getPackageInfo 也能确认装没装），一并藏
+        for (String uidMethod : new String[]{"getPackageUid", "getPackageUidAsUser"}) {
+            HookUtils.hookAllMethods("android.app.ApplicationPackageManager", uidMethod,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.args.length > 0 && param.args[0] instanceof String) {
+                            String packageName = (String) param.args[0];
+                            if (isHiddenPackage(packageName)) {
+                                param.setThrowable(new android.content.pm.PackageManager.NameNotFoundException());
+                            }
+                        }
+                    }
+                });
+        }
+
+        // 按 Intent 枚举组件（queryIntent*）的结果里也要滤掉隐藏包，只过滤不阻断
+        // ResolveInfo 里组件信息的字段名随查询类型不同：服务是 serviceInfo，活动/广播都是 activityInfo
+        for (String queryMethod : new String[]{"queryIntentActivities", "queryIntentServices", "queryIntentBroadcastReceivers"}) {
+            final String compField = queryMethod.contains("Services") ? "serviceInfo" : "activityInfo";
+            HookUtils.hookAllMethods("android.app.ApplicationPackageManager", queryMethod,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        if (param.getResult() != null) {
+                            @SuppressWarnings("unchecked")
+                            List<Object> infos = (List<Object>) param.getResult();
+                            List<Object> filtered = new ArrayList<>();
+                            for (Object info : infos) {
+                                Object comp = XposedHelpers.getObjectField(info, compField);
+                                String pkgName = comp != null ? (String) XposedHelpers.getObjectField(comp, "packageName") : null;
+                                if (!isHiddenPackage(pkgName)) {
+                                    filtered.add(info);
+                                }
+                            }
+                            param.setResult(filtered);
+                        }
+                    }
+                });
+        }
     }
 
     private static void hookProcMapsReading() {
@@ -143,7 +219,10 @@ public class XposedDetectionHook {
                                 // We can't easily get the file path, so this is limited
                                 // Return null to skip this line
                                 param.setResult(null);
-                                XposedEntry.log("Filtered hook library from maps: " + line.substring(0, Math.min(50, line.length())));
+                                // maps 一读就是几百行，逐行打日志会刷屏：只记每 200 条里的第一条
+                                if (mapsFilteredCount.incrementAndGet() % 200 == 1) {
+                                    XposedEntry.log("Filtered hook library from maps: " + line.substring(0, Math.min(50, line.length())));
+                                }
                             }
                         } catch (Throwable ignored) {
                         }
@@ -210,10 +289,10 @@ public class XposedDetectionHook {
             });
     }
 
-    private static boolean isXposedPackage(String packageName) {
+    private static boolean isHiddenPackage(String packageName) {
         if (packageName == null) return false;
-        for (String xposedPkg : XPOSED_PACKAGES) {
-            if (packageName.equals(xposedPkg)) {
+        for (String hiddenPkg : HIDDEN_PACKAGES) {
+            if (packageName.equals(hiddenPkg)) {
                 return true;
             }
         }

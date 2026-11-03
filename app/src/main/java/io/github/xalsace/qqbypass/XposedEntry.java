@@ -59,6 +59,14 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         "currentApplication");
 
                 if (context != null) {
+                    // 版本闸（合并版）：把真实 QQ 版本/SDK/ABI 打进日志，适配排障先看这一行
+                    try {
+                        android.content.pm.PackageInfo pi = context.getPackageManager()
+                            .getPackageInfo(TARGET_PACKAGE, 0);
+                        log("[VER] QQ=" + pi.versionName + " (" + pi.versionCode + ") sdk="
+                            + android.os.Build.VERSION.SDK_INT + " abi=" + android.os.Build.SUPPORTED_ABIS[0]);
+                    } catch (Exception ignored) {
+                    }
                     DexKitDetector.init(context);
 
                     // Scan all detection points
@@ -104,6 +112,14 @@ public class XposedEntry implements IXposedHookLoadPackage {
             }
         }).start();
 
+        // 进程白名单（合并版，2026-11-03）：静态钩子与 native 层只装主进程与 :MSF——
+        // 检测与上报都发生在这两个进程里；:qzone 等子进程全量装钩只增加崩溃面和日志噪声（TY 合并版同口径）。
+        boolean installHooks = isMainProcess || lpparam.processName.endsWith(":MSF");
+        if (!installHooks) {
+            log("[PROC] skip hooks for process=" + lpparam.processName + " (not whitelisted)");
+            return;
+        }
+
         try {
             // === Initialize Unified Hook Coordinator ===
             // This coordinates Java and Native layers seamlessly
@@ -119,6 +135,10 @@ public class XposedEntry implements IXposedHookLoadPackage {
 
             // Layer 3: Xposed/Hook framework detection mitigation (DexKit-based dynamic version)
             DynamicXposedDetectionHook.hook(lpparam);
+
+            // Layer 3.5: 静态 Xposed 检测兜底（包名黑名单/getPackageUid/queryIntent 过滤都在这一层；
+            // dexkit-dynamic-detection 分支起入口只调了动态版、静态 hook() 没人调，黑名单整体失效——合并版恢复）
+            XposedDetectionHook.hook(lpparam);
 
             // Layer 4: Device info consistency protection (DexKit-based dynamic version)
             DynamicDeviceInfoHook.hook(lpparam);
