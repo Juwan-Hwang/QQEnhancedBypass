@@ -152,6 +152,19 @@ public class XposedEntry implements IXposedHookLoadPackage {
             // Layer 7: QQ 9.3.50 detection-point completion (real risk/kick targets)
             QQ950PatchHook.hook(lpparam);
 
+            // Layer 8: crash-report neutralization (QQCrashReportManager/Bugly + handle listener)
+            CrashReportHook.hook(lpparam);
+            // Layer 9: VMDebug memory-walk (countInstancesOfClass(es)/getInstancesOfClasses) -> 0/empty
+            MemoryWalkHook.hook(lpparam);
+            // Layer 10: stack-trace scrubbing (Thread/Throwable getStackTrace, getName)
+            AntiTraceHook.hook(lpparam);
+            // Layer 11: hide QEB's own package from QQ (getPackageInfo/Gids/provider)
+            SelfHideHook.hook(lpparam);
+            // Layer 12: disable so/patch hot-update so detection libs can't be silently pushed
+            HotUpdateHook.hook(lpparam);
+            // Layer 13: NT->WT login downgrade (inert on QQ > 9.2.10, kept for completeness)
+            LoginDowngradeHook.hook(lpparam);
+
             // === Report Status ===
             log("=== Java Hooks Initialized ===");
             log("Initial Protection Level: " + UnifiedHookCoordinator.getProtectionLevel());
