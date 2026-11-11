@@ -28,8 +28,8 @@ android {
         applicationId "io.github.xalsace.qqbypass"
         minSdk 26
         targetSdk 34
-        versionCode 3
-        versionName "1.2.0"
+        versionCode 4
+        versionName "1.2.1"
         // 与 CI 安装的 NDK 对齐（不钉版本时本机/CI 挑到别的 NDK 会编不过或产物不一致）
         ndkVersion "25.2.9519653"
 
