@@ -146,10 +146,20 @@ static int fake_openat(int dirfd, const char* pathname, int flags, ...) {
         // 每读一次 maps 漏一个小 FILE 结构，可接受）
         if (fake) return fileno(fake);
     }
+    // smaps 之前只在 fopen 里挡；Android 16 上文件访问主要走 openat，直接 open
+    // /proc/self/smaps 会绕过 fopen 代理，这里补上，同样重定向到 /dev/null。
+    if (pathname && strcmp(pathname, "/proc/self/smaps") == 0) {
+        int nullfd = BYTEHOOK_CALL_PREV(fake_openat, dirfd, "/dev/null", flags, mode);
+        if (nullfd >= 0) return nullfd;
+    }
     if (pathname) {
         const char* hidden[] = {
             "/data/local/tmp/frida", "re.frida.server", "/system/xposed",
-            "/data/adb/lsposed", "/data/adb/modules/lsposed", "/data/adb/magisk", nullptr
+            "/data/adb/lsposed", "/data/adb/modules/lsposed", "/data/adb/magisk",
+            // 模拟器/二次注入特征文件：之前只在 fopen 挡，openat 路径同样按不存在处理。
+            "libhoudini.so", "libndk_translation", "libnb.so",
+            "libnoxd.so", "libnoxspeedup.so", "nox-prop", "nox-vbox-sf", "noxd",
+            "qemu_pipe", "libdobby.so", "libwhale.so", nullptr
         };
         for (int i = 0; hidden[i]; i++) {
             if (strstr(pathname, hidden[i])) {
@@ -187,7 +197,7 @@ static int fake_sys_prop_get(const char* name, char* value) {
         static const char* emu_props[] = {
             "ro.kernel.qemu", "ro.kernel.android.qemud", "init.svc.qemud",
             "init.svc.qemu-props", "qemu.hw.mainkeys", "qemu.sf.fake_camera",
-            "qemu.sf.lcd_density", "ro.bootmode.unknown", nullptr
+            "qemu.sf.lcd_density", nullptr
         };
         for (int i = 0; emu_props[i]; i++) {
             if (strcmp(name, emu_props[i]) == 0) {
@@ -254,8 +264,11 @@ void install_hooks() {
     bytehook_hook_all(nullptr, "fgets", (void*)fake_fgets, nullptr, nullptr);
     bytehook_hook_all(nullptr, "readlink", (void*)fake_readlink, nullptr, nullptr);
     bytehook_hook_all(nullptr, "access", (void*)fake_access, nullptr, nullptr);
-    // 源自 OpenShamrock：挡广播层 memcmp 扫描 + 模拟器系统属性
-    bytehook_hook_all(nullptr, "memcmp", (void*)fake_memcmp, nullptr, nullptr);
+    // memcmp 代理只挂到 libfekit.so（QQ 安全检测库）这一个调用方，而不是全进程。
+    // 全局 hook_all 会让每一次 memcmp 都跑一遍 footprint 扫描——真机实测启动几秒
+    // 内触发数百次，既是性能开销也可能误伤 QQ 自身的正常比较。检测逻辑集中在
+    // libfekit，scoped 到它既覆盖目标又不干扰其它库（与上面 strstr 的做法一致）。
+    bytehook_hook_single("libfekit.so", nullptr, "memcmp", (void*)fake_memcmp, nullptr, nullptr);
     bytehook_hook_all(nullptr, "__system_property_get", (void*)fake_sys_prop_get, nullptr, nullptr);
 
     LOGI("libc hooks installed");
